@@ -118,7 +118,7 @@ CREATE OR REPLACE PACKAGE keyValueUtils AS
                                 p_kvp_delimiter  VARCHAR2 := ',') RETURN VARCHAR2;
 								 
   -- This function converts a simple JSON String to a KV SET							
-  FUNCTION convertJSONToKVSet(p_json JSON) RETURN KEY_VALUE_SET;
+  FUNCTION convertJSONToKVSet(p_json JSON_OBJECT_T) RETURN KEY_VALUE_SET;
 
 END;
 /
@@ -369,20 +369,19 @@ END;
 
 /*====================================================================================================*/
 
-FUNCTION convertJSONToKVSet(p_json JSON) RETURN KEY_VALUE_SET
+FUNCTION convertJSONToKVSet(p_json JSON_OBJECT_T) RETURN KEY_VALUE_SET
 IS
 
   v_kv_set KEY_VALUE_SET := KEY_VALUE_SET();
   
-  v_key_list    JSON_LIST := p_json.get_keys();
-  v_value_list  JSON_LIST := p_json.get_values();
+  v_key_list    JSON_KEY_LIST := p_json.get_keys();
   
 BEGIN
 
 
    FOR x IN 1 .. v_key_list.count LOOP
 
-     setValue(v_kv_set,v_key_list.list_data(x).get_string(),v_value_list.list_data(x).get_string());
+     keyValueUtils.setValue(v_kv_set,v_key_list(x),p_json.get_string(v_key_list(x)));
 
    END LOOP;
    
