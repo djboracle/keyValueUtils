@@ -374,6 +374,417 @@ IS
 
   v_kv_set KEY_VALUE_SET := KEY_VALUE_SET();
   
+  v_key_list  JSON_KEY_LIST := JSON_KEY_LIST(); 
+
+  
+BEGIN
+
+   IF p_json.get_size > 0 THEN
+
+      v_key_list := p_json.get_keys();
+	  
+   END IF;
+
+
+   FOR x IN 1 .. v_key_list.count LOOP
+
+     keyValueUtils.setValue(v_kv_set,v_key_list(x),p_json.get_string(v_key_list(x)));
+
+   END LOOP;
+   
+   RETURN v_kv_set;
+
+END;
+ 
+ /*==================*/
+ /* END PACKAGE BODY */
+ /*==================*/
+
+END;
+/
+sho err;
+
+
+
+/****************
+-- Test Code
+SET SCAN OFF;
+DECLARE
+
+  v_param_string VARCHAR2(200) := 'p_id_number=20101001-0900-00&p_wst_code=W&p_start_date=09/10/2010 0900&p_end_date=09/30/2010 0700&p_emp_code=003509&p_emp_name=JBENNETT';
+  
+  v_param_set KEY_VALUE_SET := KEY_VALUE_SET();
+  
+  v_pair T_KEY_VALUE := T_KEY_VALUE();
+  
+  CURSOR crsrKVCursor(kv_set KEY_VALUE_SET) IS
+  SELECT
+          key,
+          value
+  FROM
+        TABLE(kv_set)
+  ORDER BY key;
+  
+BEGIN
+
+  v_param_set := keyvalueutils.parsestringtokvset(v_param_string,'&');
+
+  DBMS_OUTPUT.PUT_LINE('Initial Value of p_id_number='||keyvalueutils.getValue(v_param_set,'p_id_number'));
+  
+  keyvalueutils.setValue(v_param_set,'p_id_number','20101001-0930-00');
+
+  DBMS_OUTPUT.PUT_LINE('Access and Display values "manually".');
+  DBMS_OUTPUT.PUT_LINE('p_id_number='||keyvalueutils.getValue(v_param_set,'p_id_number'));
+  DBMS_OUTPUT.PUT_LINE('p_wst_code='||keyvalueutils.getValue(v_param_set,'p_wst_code'));
+  DBMS_OUTPUT.PUT_LINE('p_start_date='||keyvalueutils.getValue(v_param_set,'p_start_date'));
+  DBMS_OUTPUT.PUT_LINE('p_end_date='||keyvalueutils.getValue(v_param_set,'p_end_date'));
+  DBMS_OUTPUT.PUT_LINE('p_emp_code='||keyvalueutils.getValue(v_param_set,'p_emp_code'));
+  DBMS_OUTPUT.PUT_LINE('p_emp_name='||keyvalueutils.getValue(v_param_set,'p_emp_name'));
+  DBMS_OUTPUT.PUT_LINE('');
+  
+  v_pair.key   := 'p_new_param';
+  v_pair.value := 'Hello World';
+  
+  keyvalueutils.addPairtoCollection(v_param_set,v_pair);
+  
+  DBMS_OUTPUT.PUT_LINE('Access and display values via SQL query.');
+  
+  FOR data_rec IN crsrKVCursor(v_param_set) LOOP
+  
+    DBMS_OUTPUT.PUT_LINE(data_rec.key||'='||data_rec.value);
+
+  END LOOP;
+  
+  
+END;
+
+*****************/
+  CONSTRUCTOR FUNCTION  T_KEY_VALUE_ANY RETURN SELF AS RESULT
+  IS
+  BEGIN
+    RETURN;
+  END;
+END;
+/
+sho err;
+
+
+-- Key/Value Pair Collection
+  
+CREATE OR REPLACE TYPE KEY_VALUE_SET IS TABLE OF T_KEY_VALUE;
+/
+sho err;
+
+
+CREATE OR REPLACE TYPE KEY_VALUE_ANY_SET IS TABLE OF T_KEY_VALUE_ANY;
+/
+sho err;
+
+/****
+
+  Package containing utilities to manipulate Key/Value pair
+  sets.
+
+*****/
+
+CREATE OR REPLACE PACKAGE keyValueUtils AS
+
+
+  -- Add a KV pair to a KV pair set (collection).
+  PROCEDURE addPairToCollection(p_set   IN OUT NOCOPY KEY_VALUE_SET,
+                                p_pair  T_KEY_VALUE);
+                                
+
+  /*PROCEDURE addPairToCollection(p_set   IN OUT NOCOPY KEY_VALUE_ANY_SET,
+                                p_pair  T_KEY_VALUE_ANY);*/
+                                
+  -- Sets the value of KV pair in the given KV set (collection). 
+  -- If KV pair currently exists in the set, it will be updated.  Otherwise, a new KV pair will added to the KV set.                        
+  PROCEDURE setValue(p_set   IN OUT NOCOPY KEY_VALUE_SET,
+                     p_key   VARCHAR2,
+                     p_value VARCHAR2);
+                     
+
+  /*PROCEDURE setValue(p_set   IN OUT NOCOPY KEY_VALUE_SET,
+                     p_key   VARCHAR2,
+                     p_value SYS.ANYDATA);*/
+                     
+  
+  -- Retrieves the value of KV pair in a given KV Set.                  
+  FUNCTION getValue(p_set KEY_VALUE_SET,
+                    p_key VARCHAR2) RETURN VARCHAR2;
+
+  -- Pipeline Function for retrieving the values in the KV set via a table function in a SQL query.
+  FUNCTION pipeLineQueryKVSet(p_set KEY_VALUE_SET) RETURN KEY_VALUE_SET PIPELINED; 
+  
+  -- This function will parse a parameter string into a KV Set and return that set.
+  -- Example: test1=hello,test2=world ... would be parsed into two pairs (("test1","Hello"),("test2","World"))
+  -- The default delimiter (separates pairs in the string) is a comma, but can be anything .. like a '&' when parsing a URL param string
+  FUNCTION parseStringToKVSet(p_string         VARCHAR2,
+                              p_kvp_delimiter  VARCHAR2 := ',') RETURN KEY_VALUE_SET;
+							  
+  
+  -- This function with take a KV Set and convert it to a string such as ky1=value,key2=value,key3=value ...
+  FUNCTION convertKVSetToString(p_set KEY_VALUE_SET,
+                                p_kvp_delimiter  VARCHAR2 := ',') RETURN VARCHAR2;
+								 
+  -- This function converts a simple JSON String to a KV SET							
+  FUNCTION convertJSONToKVSet(p_json JSON_OBJECT_T) RETURN KEY_VALUE_SET;
+
+END;
+/
+
+sho err;
+
+/***********************************************************************************************************************************/
+/****************************************************** PACKAGE BODY ***************************************************************/
+/***********************************************************************************************************************************/
+
+CREATE OR REPLACE PACKAGE BODY keyValueUtils AS
+
+
+FUNCTION getStringElement(p_string    VARCHAR2,
+                          p_element   NUMBER,
+                          p_delimiter VARCHAR2 := ',',
+                          p_level     NUMBER   := 0)   RETURN VARCHAR2
+IS
+
+   v_string   VARCHAR2(2000) := NULL;
+   v_element  VARCHAR2(2000) := NULL;
+
+   v_level    NUMBER(4)      := 0;
+
+
+BEGIN
+
+   v_level := p_level + 1;
+
+   v_element  := substr(p_string||p_delimiter,1,instr(p_string||p_delimiter,p_delimiter)-1);
+
+   IF ((v_level >= p_element) OR (v_element IS NULL)) THEN
+
+      RETURN v_element;
+
+   ELSE
+
+      v_string := substr(p_string||p_delimiter,instr(p_string||p_delimiter,p_delimiter)+1,length(p_string));
+
+      RETURN getStringElement(v_string,p_element,p_delimiter,v_level);
+
+   END IF;
+
+
+END;
+
+/*================================================================================================================*/
+
+FUNCTION countElements(p_string VARCHAR2 := NULL,
+                       p_delimiter VARCHAR2 := ',') RETURN NUMBER
+IS
+
+   v_cnt NUMBER(12) := 0;
+
+   v_exit BOOLEAN := FALSE;
+
+BEGIN
+
+  IF p_string IS NOT NULL THEN
+  
+    LOOP
+      EXIT WHEN v_exit;
+    
+      v_cnt := v_cnt+ 1;
+    
+      IF INSTR(p_string,p_delimiter,1,v_cnt) = 0 THEN
+          v_exit := TRUE;
+      END IF;
+
+    END LOOP;
+  
+  END IF;
+
+  RETURN v_cnt;
+  
+END;
+
+/*============================================================================*/
+
+FUNCTION getKeyIndex(p_set KEY_VALUE_SET,
+                     p_key VARCHAR2) RETURN NUMBER
+IS
+
+   CURSOR crsrKVPData(cv_set KEY_VALUE_SET,
+                      cv_key VARCHAR2) IS
+   SELECT
+           rownum set_index,
+           ps.key
+   FROM
+           TABLE(pipeLineQueryKVSet(cv_set)) ps;
+
+  v_index NUMBER(12) := 0;
+
+BEGIN
+
+  FOR data_rec IN crsrKVPData(p_set,p_key) LOOP
+  
+     IF p_key = data_rec.key THEN
+       v_index := data_rec.set_index;
+       EXIT;
+     END IF;
+   
+  END LOOP;
+  
+  RETURN v_index;
+
+END;
+
+/*============================================================================================================*/
+
+PROCEDURE addPairToCollection(p_set   IN OUT NOCOPY KEY_VALUE_SET,
+                              p_pair  T_KEY_VALUE)
+IS
+
+  v_index NUMBER(12) := 0;
+
+BEGIN
+
+   v_index := getKeyIndex(p_set,p_pair.key);
+
+   IF v_index = 0 THEN
+   
+      p_set.EXTEND;
+      p_set(p_set.COUNT) := p_pair;
+      
+   ELSE
+   
+     p_set(v_index) := p_pair;
+   
+   END IF;
+
+END;
+
+
+/*============================================================================================================*/
+
+ PROCEDURE setValue(p_set IN OUT NOCOPY KEY_VALUE_SET,
+                    p_key   VARCHAR2,
+                    p_value VARCHAR2)
+ IS
+ 
+
+    v_index NUMBER(12) := 0;
+    
+    v_pair T_KEY_VALUE := T_KEY_VALUE();     
+ 
+ BEGIN
+ 
+    
+ 
+    v_pair.key   := p_key;
+    v_pair.value := p_value;
+ 
+    addPairToCollection(p_set,v_pair);
+ 
+ END;
+ 
+/*=========================================================================================================*/
+ 
+FUNCTION getValue(p_set KEY_VALUE_SET,
+                  p_key VARCHAR2) RETURN VARCHAR2 
+IS
+
+   v_index NUMBER(12) := 0;
+   
+   v_value VARCHAR2(4000) := NULL;
+
+BEGIN
+
+   v_index := getKeyIndex(p_set,p_key);
+
+   IF v_index > 0 THEN
+   
+      v_value := p_set(v_index).value;
+   
+   END IF;
+   
+   RETURN v_value;
+
+END;
+ 
+/*=======================================================================================================*/
+
+FUNCTION pipeLineQueryKVSet(p_set KEY_VALUE_SET) RETURN KEY_VALUE_SET PIPELINED
+IS
+BEGIN
+
+  FOR i IN 1 .. p_set.COUNT LOOP
+
+    PIPE ROW(p_set(i));
+
+  END LOOP;
+
+  RETURN;
+
+END;
+
+/*=====================================================================================================*/
+
+FUNCTION parseStringToKVSet(p_string         VARCHAR2,
+                            p_kvp_delimiter  VARCHAR2 := ',') RETURN KEY_VALUE_SET
+IS
+
+  v_set KEY_VALUE_SET := KEY_VALUE_SET();
+  
+  v_element_cnt NUMBER(12) := 0;
+  
+  v_string_pair VARCHAR2(2000) := NULL;
+
+BEGIN
+
+  v_element_cnt := countElements(p_string,p_kvp_delimiter);
+  
+  FOR x IN 1 .. v_element_cnt LOOP
+  
+    v_string_pair := getStringElement(p_string,x,p_kvp_delimiter);
+    
+    setValue(v_set,getStringElement(v_string_pair,1,'='),getStringElement(v_string_pair,2,'='));
+  
+  END LOOP;
+
+  RETURN v_set;
+
+END;
+
+/*====================================================================================================*/
+
+FUNCTION convertKVSetToString(p_set KEY_VALUE_SET,
+                              p_kvp_delimiter  VARCHAR2 := ',') RETURN VARCHAR2
+IS
+
+   v_set_string VARCHAR2(32000) := NULL;
+
+BEGIN
+
+
+   FOR x IN 1 .. p_set.COUNT LOOP
+
+    v_set_string := v_set_string||p_kvp_delimiter||p_set(x).key||'='||p_set(x).value;
+
+   END LOOP;
+   
+   v_set_string := LTRIM(v_set_string,p_kvp_delimiter);
+   
+   RETURN v_set_string;
+
+END;
+
+/*====================================================================================================*/
+
+FUNCTION convertJSONToKVSet(p_json JSON_OBJECT_T) RETURN KEY_VALUE_SET
+IS
+
+  v_kv_set KEY_VALUE_SET := KEY_VALUE_SET();
+  
   v_key_list    JSON_KEY_LIST := p_json.get_keys();
   
 BEGIN
